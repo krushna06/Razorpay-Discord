@@ -1,63 +1,20 @@
 require('dotenv').config();
-const { Client, GatewayIntentBits, REST, Routes, SlashCommandBuilder } = require('discord.js');
-const axios = require('axios');
+const { Client, GatewayIntentBits, REST, Routes, Collection } = require('discord.js');
+const fs = require('fs');
+const path = require('path');
 
 const client = new Client({ intents: [GatewayIntentBits.Guilds] });
 
-const razorpayAuth = {
-  username: process.env.RAZORPAY_KEY_ID,
-  password: process.env.RAZORPAY_KEY_SECRET
-};
+client.commands = new Collection();
 
-async function createInvoice(customerEmail, customerContact, itemName, itemAmount) {
-  const invoiceData = {
-    type: "invoice",
-    customer: {
-      email: customerEmail,
-      contact: customerContact
-    },
-    line_items: [
-      {
-        name: itemName,
-        amount: itemAmount * 100,
-        currency: "INR",
-        quantity: 1
-      }
-    ]
-  };
+const commands = [];
+const commandFiles = fs.readdirSync(path.join(__dirname, 'commands')).filter(file => file.endsWith('.js'));
 
-  try {
-    const response = await axios.post('https://api.razorpay.com/v1/invoices', invoiceData, {
-      auth: razorpayAuth
-    });
-    return response.data;
-  } catch (error) {
-    console.error('Error creating invoice:', error.response.data);
-    return null;
-  }
+for (const file of commandFiles) {
+  const command = require(`./commands/${file}`);
+  commands.push(command.data.toJSON());
+  client.commands.set(command.data.name, command);
 }
-
-const commands = [
-  new SlashCommandBuilder()
-    .setName('createinvoice')
-    .setDescription('Create a new Razorpay invoice')
-    .addStringOption(option => 
-      option.setName('email')
-        .setDescription('Customer email')
-        .setRequired(true))
-    .addStringOption(option => 
-      option.setName('contact')
-        .setDescription('Customer contact number')
-        .setRequired(true))
-    .addStringOption(option => 
-      option.setName('item')
-        .setDescription('Item name')
-        .setRequired(true))
-    .addNumberOption(option => 
-      option.setName('amount')
-        .setDescription('Item amount')
-        .setRequired(true)),
-];
 
 const rest = new REST({ version: '10' }).setToken(process.env.DISCORD_BOT_TOKEN);
 
@@ -66,7 +23,7 @@ const rest = new REST({ version: '10' }).setToken(process.env.DISCORD_BOT_TOKEN)
     console.log('Started refreshing application (/) commands.');
 
     await rest.put(
-      Routes.applicationGuildCommands('1038037031982481548', '877062059966206002'),
+      Routes.applicationGuildCommands(process.env.CLIENT_ID, process.env.GUILD_ID),
       { body: commands },
     );
 
@@ -79,21 +36,14 @@ const rest = new REST({ version: '10' }).setToken(process.env.DISCORD_BOT_TOKEN)
 client.on('interactionCreate', async interaction => {
   if (!interaction.isCommand()) return;
 
-  const { commandName, options } = interaction;
+  const command = client.commands.get(interaction.commandName);
+  if (!command) return;
 
-  if (commandName === 'createinvoice') {
-    const customerEmail = options.getString('email');
-    const customerContact = options.getString('contact');
-    const itemName = options.getString('item');
-    const itemAmount = options.getNumber('amount');
-
-    const invoice = await createInvoice(customerEmail, customerContact, itemName, itemAmount);
-
-    if (invoice) {
-      await interaction.reply(`Invoice created! View it here: ${invoice.short_url}`);
-    } else {
-      await interaction.reply('Failed to create the invoice.');
-    }
+  try {
+    await command.execute(interaction);
+  } catch (error) {
+    console.error(error);
+    await interaction.reply({ content: 'There was an error executing that command!', ephemeral: true });
   }
 });
 
